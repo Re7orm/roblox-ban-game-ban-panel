@@ -1,7 +1,8 @@
 ﻿# Roblox Admin Panel
 
 A custom administration and moderation panel for Roblox experiences. It provides a clean interface and essential commands for game management.
-
+IF YOU WANT TO HELP ME 
+contact me contact.re7orm@gmail.com or add me on discord @Re7orm
 ## Features
 
 ## Features
@@ -48,4 +49,4 @@ local CONFIG = {
     MaxLogEntries = 200,
     PingInterval  = 5,    
     MaxSpeed      = 300,  
-}```
+}
