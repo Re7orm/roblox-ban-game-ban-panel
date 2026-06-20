@@ -29,6 +29,8 @@ This panel is designed to be extremely lightweight and requires only two scripts
    * Create a `LocalScript` inside `StarterPlayerScripts`.
    * Name the script exactly: `admin panel`
    * Paste the client-side code into this script.
+here a lil demo <img width="390" height="303" alt="grafik" src="https://github.com/user-attachments/assets/d2c41f7f-2f8e-44ca-a526-45c070fc23a2" />
+
 
 ## Configuration & Access
 
