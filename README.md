@@ -1,57 +1,59 @@
-﻿# Roblox Admin Panel
+# NoVa Panel — Roblox Admin & Moderation System
 
-A custom administration and moderation panel for Roblox experiences. It provides a clean interface and essential commands for game management.
-IF YOU WANT TO HELP ME 
-contact me contact.re7orm@gmail.com or add me on discord @Re7orm
-## Features
+A sleek, high-performance administration panel for Roblox experiences. Built for serious developers who need clean, reliable, and powerful moderation tools.
 
-## Features
+![NoVa Panel](https://github.com/user-attachments/assets/b3da9225-7515-493a-8203-4b027d482303)
 
-* **Native Platform Banning:** Utilizes Roblox's native `BanAsync()` to ban users at the platform level, allowing for cross-server enforcement and offline banning via UserId.
-* **Device Alt-Account Blocking:** Includes an option to apply a hardware/device block (`ApplyDeviceBlock`), preventing banned users from rejoining for 24 hours on alt accounts from the same device.
-* **Temporary & Permanent Bans:** Supports setting custom ban durations in days or issuing permanent bans.
-* **Persistent Action Logging:** Saves up to 200 of the most recent moderation actions to a DataStore, viewable directly in the panel's Log tab even after server restarts.
-* **Live Server Monitoring:** Automatically updates player ping and connection status in real-time every 5 seconds.
-* **Essential Moderation Tools:** Quickly Kick, Kill, Respawn, Warn, or modify a player's WalkSpeed with a safe maximum limit to prevent typing errors.
-* **Server Announcements:** Broadcast global messages to the entire server or send dedicated modal warnings to specific players.
-* **Admin Feedback Toasts:** Provides instant, on-screen success or error notifications to the admin whenever a command is executed or a target is not found.
+---
+
+## Core Features
+
+- **Native Platform Bans** — Leverages Roblox's `BanAsync()` for true cross-server and offline bans using UserIds.
+- **Device-Level Protection** — Optional `ApplyDeviceBlock` to block hardware alts for 24 hours.
+- **Flexible Ban Durations** — Temporary bans in days or permanent.
+- **Persistent Logging** — Stores up to 200 recent moderation actions in a DataStore. Viewable in the Log tab across server restarts.
+- **Live Server Monitoring** — Real-time player ping and status updates every 5 seconds.
+- **Essential Commands** — Kick, Kill, Respawn, Warn, and controlled WalkSpeed modification (with safety cap).
+- **Announcements** — Global server broadcasts or targeted modal warnings.
+- **Instant Feedback** — Clean on-screen toasts for every action.
+
+### Screenshots
+
+**In-Game Ban Example**  
+![Join Error](https://github.com/user-attachments/assets/d2c41f7f-2f8e-44ca-a526-45c070fc23a2)
+
+---
 
 ## Installation
 
-This panel is designed to be extremely lightweight and requires only two scripts to function perfectly. Follow these exact steps to install it in your game:
+This system is extremely lightweight — only **two scripts** required.
 
-1. **Server Setup**
-   * Create a `Script` inside `ServerScriptService`.
-   * Name the script exactly: `admin panel`
-   * Paste the server-side code into this script.
+### 1. Server Script
+- Create a **Script** in `ServerScriptService`
+- Name it exactly: `admin panel`
+- Paste the server-side code
 
-2. **Client Setup**
-   * Create a `LocalScript` inside `StarterPlayerScripts`.
-   * Name the script exactly: `admin panel`
-   * Paste the client-side code into this script.
-here a lil demo
-<img width="390" height="303" alt="grafik" src="https://github.com/user-attachments/assets/d2c41f7f-2f8e-44ca-a526-45c070fc23a2" />
-Panel:
-<img width="992" height="621" alt="grafik" src="https://github.com/user-attachments/assets/b3da9225-7515-493a-8203-4b027d482303" />
+### 2. Client Script
+- Create a **LocalScript** in `StarterPlayer > StarterPlayerScripts`
+- Name it exactly: `admin panel`
+- Paste the client-side code
 
+---
 
-## Configuration & Access
+## Configuration
 
-By default, the panel is restricted. To give yourself (or other moderators) access, you must configure your UserId in the server script:
+1. Open the server script (`admin panel` in ServerScriptService)
+2. Edit the `CONFIG` table at the top:
 
-1. Open the `admin panel` script located in `ServerScriptService`.
-2. Locate the configuration section at the top of the code (lines 9 to 18).
-3. Add your exact Roblox UserId to the admins list. 
-
-**Example:**
 ```lua
 local CONFIG = {
     Admins = {
-        977183429, -- Add your UserID here
+        977183429, -- ← Add your UserId here
+        -- 123456789, -- Additional admins
     },
-    BanStoreName  = "AdminPanel_BanRecords_v3",
-    LogStoreName  = "AdminPanel_Logs_v3",
+    BanStoreName = "AdminPanel_BanRecords_v3",
+    LogStoreName = "AdminPanel_Logs_v3",
     MaxLogEntries = 200,
-    PingInterval  = 5,    
-    MaxSpeed      = 300,  
+    PingInterval = 5,
+    MaxSpeed = 300,
 }
