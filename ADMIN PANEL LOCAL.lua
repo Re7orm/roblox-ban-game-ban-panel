@@ -1,10 +1,9 @@
-
-
-		local Players           = game:GetService("Players")
+local Players           = game:GetService("Players")
 local UserInputService  = game:GetService("UserInputService")
 local TweenService      = game:GetService("TweenService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Lighting          = game:GetService("Lighting")
+local RunService        = game:GetService("RunService")
 
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
@@ -15,6 +14,25 @@ if not AdminFolder then return end
 local RE_Command = AdminFolder:WaitForChild("AdminCommand")
 local RE_Update  = AdminFolder:WaitForChild("AdminUpdate")
 local RF_GetData = AdminFolder:WaitForChild("GetAdminData")
+local RE_Stats   = AdminFolder:WaitForChild("ReportStats")
+
+-- ─────────────────────────────────────────────
+--  EVERYONE: self-report FPS every few seconds (admin or not — a server
+--  can't measure a client's FPS on its own, so each client has to send it).
+-- ─────────────────────────────────────────────
+do
+	local frames = 0
+	RunService.RenderStepped:Connect(function()
+		frames += 1
+	end)
+	task.spawn(function()
+		while true do
+			task.wait(3)
+			RE_Stats:FireServer(frames / 3)
+			frames = 0
+		end
+	end)
+end
 
 -- ─────────────────────────────────────────────
 --  SHARED STATE & CONSTANTS
@@ -28,20 +46,22 @@ local State = {
 local function px(x, y) return UDim2.new(0, x, 0, y) end
 local PANEL_W, PANEL_H = 960, 600
 
+-- Monochrome "agency" theme — replaces the old purple accent with white/grey,
+-- and the old dark-purple tones with near-black, per request.
 local C = {
-	BgOuter   = Color3.fromRGB(10, 10, 15),
-	BgInner   = Color3.fromRGB(18, 18, 24),
-	Card      = Color3.fromRGB(30, 30, 40),
-	CardHover = Color3.fromRGB(40, 40, 54),
-	Accent    = Color3.fromRGB(150, 70, 255),
-	AccentDim = Color3.fromRGB(100, 40, 180),
-	Green     = Color3.fromRGB(50, 255, 130),
-	Yellow    = Color3.fromRGB(255, 200, 50),
-	Red       = Color3.fromRGB(255, 60, 80),
+	BgOuter   = Color3.fromRGB(8, 8, 9),
+	BgInner   = Color3.fromRGB(16, 16, 17),
+	Card      = Color3.fromRGB(24, 24, 26),
+	CardHover = Color3.fromRGB(34, 34, 37),
+	Accent    = Color3.fromRGB(235, 235, 235), -- was purple, now near-white
+	AccentDim = Color3.fromRGB(150, 150, 155), -- was dark purple, now mid-grey
+	Green     = Color3.fromRGB(70, 200, 120),
+	Yellow    = Color3.fromRGB(220, 180, 60),
+	Red       = Color3.fromRGB(215, 60, 60),
 	TextHi    = Color3.fromRGB(255, 255, 255),
-	TextMid   = Color3.fromRGB(180, 180, 200),
-	TextLo    = Color3.fromRGB(110, 110, 130),
-	Border    = Color3.fromRGB(60, 60, 80),
+	TextMid   = Color3.fromRGB(190, 190, 195),
+	TextLo    = Color3.fromRGB(120, 120, 125),
+	Border    = Color3.fromRGB(65, 65, 68),
 }
 
 local TWEEN_FAST   = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
@@ -54,19 +74,19 @@ local TWEEN_SMOOTH = TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirec
 --  else in this script secretly adds extra transparency on top of these.
 -- ─────────────────────────────────────────────
 local GLASS = {
-	Panel     = 0.10, -- the main panel's own background (mostly hidden behind the panes below)
-	TitleBar  = 0.08, -- top bar with "TACTICAL OPS"
-	Sidebar   = 0.12, -- left nav column
-	CmdBar    = 0.10, -- bottom command bar on the Players page
-	Card      = 0.06, -- player / ban / log list rows
-	CardHover = 0.0,  -- player row when you mouse over it (fully solid for emphasis)
-	Input     = 0.12, -- text boxes (target/reason/duration) and the device-block toggle
-	Button    = 0.08, -- KICK/BAN/KILL/etc and nav buttons (idle state)
-	Toast     = 0.05, -- success/error notification popups, top-right
-	Banner    = 0.05, -- the centered server broadcast banner
-	Modal     = 0.03, -- the full-screen "WARNING" popup
-	Hint      = 0.15, -- the small "F4 - OPS COM" pill shown when the panel is closed
-	BlurSize  = 12,   -- how strong the background blur gets while the panel is open (0-56ish)
+	Panel     = 0.10,
+	TitleBar  = 0.08,
+	Sidebar   = 0.12,
+	CmdBar    = 0.10,
+	Card      = 0.06,
+	CardHover = 0.0,
+	Input     = 0.12,
+	Button    = 0.08,
+	Toast     = 0.05,
+	Banner    = 0.05,
+	Modal     = 0.03,
+	Hint      = 0.15,
+	BlurSize  = 12,
 }
 
 -- ─────────────────────────────────────────────
@@ -96,12 +116,9 @@ local function AddPadding(parent, all)
 	return p
 end
 
--- Subtle white sheen — implemented as a SEPARATE overlay Frame sitting on top
--- of `parent`, with its own UIGradient.Transparency. This is deliberate: a
--- UIGradient.Transparency on `parent` itself would REPLACE parent's own
--- BackgroundTransparency rather than blend with it (that was the bug). By
--- putting the gradient on a dedicated overlay instead, the surface underneath
--- keeps exactly the transparency you gave it in the GLASS table above.
+-- Subtle white sheen — a SEPARATE overlay Frame on top of `parent`, never
+-- touching parent's own BackgroundTransparency (a UIGradient.Transparency on
+-- parent itself would replace it rather than blend with it).
 local function AddGlassSheen(parent, rotation)
 	local overlay = Instance.new("Frame")
 	overlay.Name = "GlassSheen"
@@ -119,10 +136,6 @@ local function AddGlassSheen(parent, rotation)
 
 	local g = Instance.new("UIGradient")
 	g.Rotation = rotation or 100
-	-- These numbers ARE the overlay's final rendered transparency (since a
-	-- UIGradient.Transparency sequence overrides whatever BackgroundTransparency
-	-- the overlay starts with) — kept high so the highlight stays faint, and
-	-- always within 0-1.
 	g.Transparency = NumberSequence.new({
 		NumberSequenceKeypoint.new(0, 0.90),
 		NumberSequenceKeypoint.new(0.5, 0.97),
@@ -132,10 +145,7 @@ local function AddGlassSheen(parent, rotation)
 	return overlay
 end
 
--- A gradient riding along a UIStroke so the panel's edge catches light like
--- a glass rim instead of being a flat single-color outline. This only ever
--- touches the stroke's Color, never any Transparency property, so it can't
--- cause the override bug described above.
+-- A gradient riding along a UIStroke so the panel's edge catches light.
 local function AddEdgeLight(stroke, accentColor)
 	local g = Instance.new("UIGradient")
 	g.Rotation = 90
@@ -151,6 +161,12 @@ end
 local function GetPingColor(ping)
 	if ping < 100 then return C.Green end
 	if ping < 200 then return C.Yellow end
+	return C.Red
+end
+
+local function GetFpsColor(fps)
+	if fps >= 45 then return C.Green end
+	if fps >= 25 then return C.Yellow end
 	return C.Red
 end
 
@@ -174,7 +190,6 @@ ScreenGui.ResetOnSpawn = false
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 ScreenGui.Parent = PlayerGui
 
--- Background blur used for the panel's glass effect. Created once, shared.
 local Blur = Lighting:FindFirstChild("TacticalAdminBlur")
 if not Blur then
 	Blur = Instance.new("BlurEffect")
@@ -183,7 +198,7 @@ if not Blur then
 	Blur.Parent = Lighting
 end
 
--- ── Server broadcast banner (everyone can receive this) ──
+-- ── Server broadcast banner (everyone can receive this, from any server) ──
 local function ShowAnnouncement(data)
 	local annFrame = Instance.new("Frame", ScreenGui)
 	annFrame.Size = px(440, 110)
@@ -237,7 +252,7 @@ local function ShowAnnouncement(data)
 	end)
 end
 
--- ── Personal warning modal (sent to a specific player, admin or not) ──
+-- ── Personal warning modal ──
 local function ShowWarnModal(data)
 	local Dim = Instance.new("Frame", ScreenGui)
 	Dim.Size = UDim2.new(1, 0, 1, 0)
@@ -320,8 +335,6 @@ end
 local initialData = RF_GetData:InvokeServer()
 local isAdminClient = initialData ~= nil
 
--- Forward-declared so the universal listener below can reach it once the full
--- admin panel (further down this script) assigns it a real function.
 local AdminEventRouter = nil
 
 RE_Update.OnClientEvent:Connect(function(eventType, data)
@@ -335,7 +348,7 @@ RE_Update.OnClientEvent:Connect(function(eventType, data)
 end)
 
 if not isAdminClient then
-	return -- Non-admins stop here, but they keep receiving broadcasts/warnings above.
+	return -- Non-admins stop here, but they still get broadcasts/warnings, and still self-report FPS above.
 end
 
 State.players = initialData.players or {}
@@ -344,7 +357,6 @@ State.players = initialData.players or {}
 --  ADMIN PANEL — MAIN UI CONSTRUCTION
 -- ─────────────────────────────────────────────
 
--- Hint Frame
 local HintFrame = Instance.new("Frame")
 HintFrame.Size = px(130, 36)
 HintFrame.Position = UDim2.new(0, 24, 0, 24)
@@ -362,7 +374,6 @@ HintText.Text = "F4 - OPS COM"
 HintText.Font = Enum.Font.GothamBold
 HintText.TextSize = 13
 
--- Toast container (top-right) — this is the "output" feedback for every command.
 local ToastContainer = Instance.new("Frame")
 ToastContainer.Size = UDim2.new(0, 320, 1, -40)
 ToastContainer.Position = UDim2.new(1, -340, 0, 20)
@@ -423,8 +434,6 @@ local function ShowToast(message, kind)
 	end)
 end
 
--- Main Panel — AnchorPoint centers it regardless of size, which both fixes the
--- old open/close scale animation and makes drag math simple.
 local Panel = Instance.new("CanvasGroup")
 Panel.Size = px(PANEL_W, PANEL_H)
 Panel.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -432,7 +441,7 @@ Panel.Position = UDim2.new(0.5, 0, 0.5, 0)
 Panel.BackgroundColor3 = C.BgOuter
 Panel.BackgroundTransparency = GLASS.Panel
 Panel.GroupTransparency = 1
-Panel.ClipsDescendants = true -- keeps square-cornered children from poking past the rounded corner
+Panel.ClipsDescendants = true
 Panel.Visible = false
 AddCorner(Panel, 14)
 local PanelStroke = AddStroke(Panel, C.Border, 2)
@@ -445,7 +454,6 @@ TopGlow.Size = UDim2.new(1, 0, 0, 2)
 TopGlow.BackgroundColor3 = C.Accent
 TopGlow.BorderSizePixel = 0
 
--- Title Bar (also the drag handle)
 local TitleBar = Instance.new("Frame")
 TitleBar.Size = UDim2.new(1, 0, 0, 56)
 TitleBar.BackgroundColor3 = C.BgInner
@@ -459,8 +467,8 @@ TitleLine.BackgroundColor3 = C.Border
 TitleLine.BorderSizePixel = 0
 
 local TitleText = Instance.new("TextLabel")
-TitleText.Size = px(220, 56)
-TitleText.Position = px(24, 0)
+TitleText.Size = px(220, 30)
+TitleText.Position = px(24, 4)
 TitleText.BackgroundTransparency = 1
 TitleText.TextXAlignment = Enum.TextXAlignment.Left
 TitleText.TextColor3 = C.Accent
@@ -469,15 +477,16 @@ TitleText.Font = Enum.Font.GothamBlack
 TitleText.TextSize = 20
 TitleText.Parent = TitleBar
 
-local DragHint = Instance.new("TextLabel", TitleBar)
-DragHint.Size = px(160, 16)
-DragHint.Position = px(24, 36)
-DragHint.BackgroundTransparency = 1
-DragHint.TextXAlignment = Enum.TextXAlignment.Left
-DragHint.TextColor3 = C.TextLo
-DragHint.Text = "⠿ drag to move"
-DragHint.Font = Enum.Font.Gotham
-DragHint.TextSize = 11
+local RestrictedTag = Instance.new("TextLabel", TitleBar)
+RestrictedTag.Size = px(220, 16)
+RestrictedTag.Position = px(24, 34)
+RestrictedTag.BackgroundTransparency = 1
+RestrictedTag.TextXAlignment = Enum.TextXAlignment.Left
+RestrictedTag.TextColor3 = C.TextLo
+RestrictedTag.Text = "RESTRICTED ACCESS  •  ⠿ drag to move"
+RestrictedTag.Font = Enum.Font.Code
+RestrictedTag.TextSize = 11
+RestrictedTag.LineHeight = 1
 
 local UserBadge = Instance.new("TextLabel", TitleBar)
 UserBadge.Size = px(150, 56)
@@ -535,7 +544,6 @@ do
 	end)
 end
 
--- Navigation Sidebar
 local Sidebar = Instance.new("Frame")
 Sidebar.Size = UDim2.new(0, 180, 1, -56)
 Sidebar.Position = UDim2.new(0, 0, 0, 56)
@@ -702,7 +710,6 @@ P_Scroll.BorderSizePixel = 0
 local P_List = Instance.new("UIListLayout", P_Scroll)
 P_List.Padding = UDim.new(0, 8)
 
--- Command Bar (two rows: inputs, then action buttons)
 local CmdBar = Instance.new("Frame", PagePlayers)
 CmdBar.Size = UDim2.new(1, -32, 0, 120)
 CmdBar.Position = UDim2.new(0, 16, 1, -136)
@@ -729,7 +736,7 @@ ButtonRow.Size = UDim2.new(1, 0, 0, 40)
 ButtonRow.BackgroundTransparency = 1
 local ButtonLayout = Instance.new("UIListLayout", ButtonRow)
 ButtonLayout.FillDirection = Enum.FillDirection.Horizontal
-ButtonLayout.Padding = UDim.new(0, 8)
+ButtonLayout.Padding = UDim.new(0, 6)
 ButtonLayout.VerticalAlignment = Enum.VerticalAlignment.Center
 
 local TgtBox = MakeInput(InputRow, "Target name or UserId...", 200)
@@ -739,13 +746,13 @@ local _, GetDeviceBlock = MakeToggle(InputRow, "Device Block", 140)
 
 local function MakeCmdBtn(label, color, cmd, confirmNeeded)
 	local b = Instance.new("TextButton", ButtonRow)
-	b.Size = px(86, 40)
+	b.Size = px(78, 40)
 	b.BackgroundColor3 = C.Card
 	b.BackgroundTransparency = GLASS.Button
 	b.TextColor3 = color
 	b.Text = label
 	b.Font = Enum.Font.GothamBold
-	b.TextSize = 13
+	b.TextSize = 12
 	b.AutoButtonColor = false
 	AddCorner(b, 8)
 	local stroke = AddStroke(b, C.Border, 1)
@@ -796,16 +803,16 @@ end
 MakeCmdBtn("KICK",    C.Yellow, "Kick",    true)
 MakeCmdBtn("BAN",     C.Red,    "Ban",     true)
 MakeCmdBtn("KILL",    C.Red,    "Kill",    true)
-MakeCmdBtn("UNBAN",   C.Green,  "Unban",   true) -- Added between Kill and Speed
+MakeCmdBtn("UNBAN",   C.Green,  "Unban",   true)
 MakeCmdBtn("SPEED",   C.Accent, "Speed",   false)
 MakeCmdBtn("WARN",    C.Yellow, "Warn",    false)
 MakeCmdBtn("RESPAWN", C.Accent, "Respawn", false)
 
-local PlayerRows = {} -- [userId] = { frame, dot, pingLabel }
+local PlayerRows = {} -- [userId] = { frame, dot, pingLabel, fpsLabel, countryLabel }
 
 local function UpdatePlayersCanvas()
 	local count = 0
-	for _ in pairs(PlayerRows) do count = count + 1 end
+	for _ in pairs(PlayerRows) do count += 1 end
 	P_Scroll.CanvasSize = UDim2.new(0, 0, 0, count * 54)
 end
 
@@ -830,8 +837,9 @@ local function CreatePlayerRow(p)
 	dot.BackgroundColor3 = pingColor
 	AddCorner(dot, 10)
 
+	-- Name field width is reduced to leave room for Country / FPS / Ping on the right.
 	local t = Instance.new("TextLabel", r)
-	t.Size = UDim2.new(1, -150, 1, 0)
+	t.Size = UDim2.new(1, -332, 1, 0)
 	t.Position = px(36, 0)
 	t.BackgroundTransparency = 1
 	t.TextColor3 = C.TextHi
@@ -839,6 +847,28 @@ local function CreatePlayerRow(p)
 	t.Text = p.name .. (p.isAdmin and "  ⚡" or "") .. "   |   ID: " .. p.userId
 	t.Font = Enum.Font.GothamMedium
 	t.TextSize = 14
+	t.TextTruncate = Enum.TextTruncate.AtEnd
+
+	local countryLabel = Instance.new("TextLabel", r)
+	countryLabel.Size = px(60, 46)
+	countryLabel.Position = UDim2.new(1, -296, 0, 0)
+	countryLabel.BackgroundTransparency = 1
+	countryLabel.TextXAlignment = Enum.TextXAlignment.Center
+	countryLabel.TextColor3 = C.TextMid
+	countryLabel.Text = p.country or "??"
+	countryLabel.Font = Enum.Font.Code
+	countryLabel.TextSize = 13
+
+	local fpsColor = GetFpsColor(p.fps or 0)
+	local fpsLabel = Instance.new("TextLabel", r)
+	fpsLabel.Size = px(70, 46)
+	fpsLabel.Position = UDim2.new(1, -216, 0, 0)
+	fpsLabel.BackgroundTransparency = 1
+	fpsLabel.TextXAlignment = Enum.TextXAlignment.Right
+	fpsLabel.TextColor3 = fpsColor
+	fpsLabel.Text = (p.fps or 0) .. " fps"
+	fpsLabel.Font = Enum.Font.Code
+	fpsLabel.TextSize = 13
 
 	local pt = Instance.new("TextLabel", r)
 	pt.Size = px(100, 46)
@@ -850,7 +880,7 @@ local function CreatePlayerRow(p)
 	pt.Font = Enum.Font.Code
 	pt.TextSize = 14
 
-	PlayerRows[p.userId] = { frame = r, dot = dot, pingLabel = pt }
+	PlayerRows[p.userId] = { frame = r, dot = dot, pingLabel = pt, fpsLabel = fpsLabel, countryLabel = countryLabel }
 	UpdatePlayersCanvas()
 end
 
@@ -863,13 +893,24 @@ local function RemovePlayerRow(userId)
 	end
 end
 
-local function UpdatePlayerPing(userId, ping)
+-- Now updates ping, fps, AND country together (renamed from the old
+-- ping-only "PingUpdate" — see server bug report item 5).
+local function UpdatePlayerStats(userId, ping, fps, country)
 	local row = PlayerRows[userId]
-	if row then
-		local color = GetPingColor(ping)
-		row.dot.BackgroundColor3 = color
-		row.pingLabel.TextColor3 = color
+	if not row then return end
+
+	if ping then
+		local pingColor = GetPingColor(ping)
+		row.dot.BackgroundColor3 = pingColor
+		row.pingLabel.TextColor3 = pingColor
 		row.pingLabel.Text = ping .. " ms"
+	end
+	if fps then
+		row.fpsLabel.TextColor3 = GetFpsColor(fps)
+		row.fpsLabel.Text = fps .. " fps"
+	end
+	if country then
+		row.countryLabel.Text = country
 	end
 end
 
@@ -891,14 +932,14 @@ local BanRows = {} -- [userId] = frame
 local function UpdateBansCanvas()
 	local count = 0
 	for _ in pairs(BanRows) do count += 1 end
-	B_Scroll.CanvasSize = UDim2.new(0, 0, 0, count * 70)
+	B_Scroll.CanvasSize = UDim2.new(0, 0, 0, count * 78)
 end
 
 local function CreateBanRow(rec)
 	if BanRows[rec.userId] then BanRows[rec.userId]:Destroy() end
 
 	local r = Instance.new("Frame", B_Scroll)
-	r.Size = UDim2.new(1, 0, 0, 62)
+	r.Size = UDim2.new(1, 0, 0, 70)
 	r.BackgroundColor3 = C.Card
 	r.BackgroundTransparency = GLASS.Card
 	AddCorner(r, 10)
@@ -912,7 +953,7 @@ local function CreateBanRow(rec)
 	name.TextXAlignment = Enum.TextXAlignment.Left
 	name.Font = Enum.Font.GothamBold
 	name.TextSize = 14
-	name.Text = (rec.name or ("UserId " .. rec.userId)) .. (rec.deviceBlock and "  🔒" or "")
+	name.Text = rec.name or ("UserId " .. rec.userId)
 
 	local reason = Instance.new("TextLabel", r)
 	reason.Size = UDim2.new(1, -220, 0, 18)
@@ -926,14 +967,29 @@ local function CreateBanRow(rec)
 	reason.Text = (rec.reason or "No reason") .. "  •  by " .. (rec.bannedBy or "?")
 
 	local expiry = Instance.new("TextLabel", r)
-	expiry.Size = px(110, 18)
-	expiry.Position = px(14, 46)
+	expiry.Size = px(140, 18)
+	expiry.Position = px(14, 48)
 	expiry.BackgroundTransparency = 1
 	expiry.TextColor3 = (rec.expiresAt == -1) and C.Red or C.Yellow
 	expiry.TextXAlignment = Enum.TextXAlignment.Left
 	expiry.Font = Enum.Font.Code
 	expiry.TextSize = 11
 	expiry.Text = FormatExpiry(rec.expiresAt)
+
+	-- Clear, hard-to-miss device-ban badge (was just a tiny 🔒 before — see bug #2).
+	if rec.deviceBlock then
+		local badge = Instance.new("TextLabel", r)
+		badge.Size = px(110, 18)
+		badge.Position = px(160, 48)
+		badge.BackgroundColor3 = C.Red
+		badge.BackgroundTransparency = 0.75
+		badge.TextColor3 = C.Red
+		badge.TextXAlignment = Enum.TextXAlignment.Center
+		badge.Font = Enum.Font.GothamBlack
+		badge.TextSize = 10
+		badge.Text = "🔒 DEVICE BANNED"
+		AddCorner(badge, 5)
+	end
 
 	local unbanBtn = Instance.new("TextButton", r)
 	unbanBtn.Size = px(90, 36)
@@ -964,7 +1020,7 @@ local function RemoveBanRow(userId)
 end
 
 -- ─────────────────────────────────────────────
---  LOG PAGE  (console-style, auto-scrolls to newest)
+--  LOG PAGE  (console-style, auto-scrolls to newest, now synced across servers)
 -- ─────────────────────────────────────────────
 local L_Scroll = Instance.new("ScrollingFrame", PageLog)
 L_Scroll.Size = UDim2.new(1, -32, 1, -32)
@@ -1042,9 +1098,19 @@ AnnTitle.Text = "SERVER BROADCAST"
 AnnTitle.Font = Enum.Font.GothamBlack
 AnnTitle.TextSize = 22
 
+local AnnSubtitle = Instance.new("TextLabel", PageAnnounce)
+AnnSubtitle.Size = px(400, 16)
+AnnSubtitle.Position = px(24, 46)
+AnnSubtitle.BackgroundTransparency = 1
+AnnSubtitle.TextXAlignment = Enum.TextXAlignment.Left
+AnnSubtitle.TextColor3 = C.TextLo
+AnnSubtitle.Text = "Sent to every live server, not just this one."
+AnnSubtitle.Font = Enum.Font.Code
+AnnSubtitle.TextSize = 11
+
 local AnnBox = Instance.new("TextBox", PageAnnounce)
-AnnBox.Size = UDim2.new(1, -48, 0, 180)
-AnnBox.Position = px(24, 66)
+AnnBox.Size = UDim2.new(1, -48, 0, 160)
+AnnBox.Position = px(24, 70)
 AnnBox.BackgroundColor3 = C.BgOuter
 AnnBox.BackgroundTransparency = GLASS.Input
 AnnBox.TextColor3 = C.TextHi
@@ -1066,7 +1132,7 @@ AnnBox.FocusLost:Connect(function() TweenService:Create(AnnStroke, TWEEN_FAST, {
 
 local AnnBtn = Instance.new("TextButton", PageAnnounce)
 AnnBtn.Size = px(220, 48)
-AnnBtn.Position = px(24, 266)
+AnnBtn.Position = px(24, 250)
 AnnBtn.BackgroundColor3 = C.Accent
 AnnBtn.TextColor3 = C.BgOuter
 AnnBtn.Text = "SEND BROADCAST"
@@ -1089,13 +1155,11 @@ end)
 
 -- ─────────────────────────────────────────────
 --  ADMIN-ONLY EVENT ROUTING
---  (assigning the forward-declared local connects everything set up above to
---  the single RE_Update listener registered near the top of the script)
 -- ─────────────────────────────────────────────
 AdminEventRouter = function(eventType, data)
 	if eventType == "PlayerJoined" then
-		table.insert(State.players, { name = data.name, userId = data.userId, ping = 0, isAdmin = data.isAdmin })
-		CreatePlayerRow({ name = data.name, userId = data.userId, ping = 0, isAdmin = data.isAdmin })
+		table.insert(State.players, { name = data.name, userId = data.userId, isAdmin = data.isAdmin, ping = 0, fps = 0, country = "??" })
+		CreatePlayerRow({ name = data.name, userId = data.userId, isAdmin = data.isAdmin, ping = 0, fps = 0, country = "??" })
 
 	elseif eventType == "PlayerLeft" then
 		for i, p in ipairs(State.players) do
@@ -1103,9 +1167,9 @@ AdminEventRouter = function(eventType, data)
 		end
 		RemovePlayerRow(data.userId)
 
-	elseif eventType == "PingUpdate" then
+	elseif eventType == "StatsUpdate" then
 		for _, entry in ipairs(data) do
-			UpdatePlayerPing(entry.userId, entry.ping)
+			UpdatePlayerStats(entry.userId, entry.ping, entry.fps, entry.country)
 		end
 
 	elseif eventType == "Notify" then
@@ -1151,7 +1215,7 @@ local function TogglePanel()
 
 		Panel.Size = px(PANEL_W * 0.95, PANEL_H * 0.95)
 		TweenService:Create(Panel, TWEEN_SMOOTH, {
-			GroupTransparency = 0, -- fully opaque group multiplier; GLASS.* values above are the only thing left controlling tr
+			GroupTransparency = 0,
 			Size = px(PANEL_W, PANEL_H),
 		}):Play()
 
