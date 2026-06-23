@@ -1,6 +1,6 @@
-# NoVa Panel — Moderation System
+# NoVa Panel — Moderation System v5
 
-A sleek, high-performance administration panel for Roblox experiences. Built for serious developers who need clean, reliable, and powerful moderation tools.
+A sleek, high-performance administration panel for Roblox experiences. Built for serious developers who need clean, reliable, and powerful moderation tools. READ UPDATES BELOW!
 
 ![NoVa Panel](https://github.com/user-attachments/assets/b3da9225-7515-493a-8203-4b027d482303)
 
