@@ -56,7 +56,9 @@ local CONFIG = {
     MaxLogEntries = 200,
     PingInterval = 5,
     MaxSpeed = 300,
-}```
+}
+```
+
 # 🚀 v5 Release: "Tactical Ops: Network"
 
 > **A complete network overhaul and visual refresh.** 
