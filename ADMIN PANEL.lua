@@ -1,7 +1,8 @@
-local Players           = game:GetService("Players")
-
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local DataStoreService  = game:GetService("DataStoreService")
+local Players             = game:GetService("Players")
+local ReplicatedStorage   = game:GetService("ReplicatedStorage")
+local DataStoreService    = game:GetService("DataStoreService")
+local MessagingService    = game:GetService("MessagingService")
+local LocalizationService = game:GetService("LocalizationService")
 
 -- ─────────────────────────────────────────────
 --  CONFIGURATION
@@ -12,8 +13,9 @@ local CONFIG = {
 	},
 	BanStoreName  = "AdminPanel_BanRecords_v3",
 	LogStoreName  = "AdminPanel_Logs_v3",
+	BusTopic      = "TacticalAdminBus_v1", -- cross-server channel (Announce/Ban/Unban/Log)
 	MaxLogEntries = 200,
-	PingInterval  = 5,    -- seconds between live ping broadcasts
+	StatsInterval = 5,    -- seconds between ping/FPS/country broadcasts to admins
 	MaxSpeed      = 300,  -- sanity clamp for the Speed command
 }
 
@@ -32,9 +34,26 @@ pcall(function()
 	if saved then LogCache = saved end
 end)
 
-local function saveBans()
+-- Merge-only writes: each server only ever modifies the one key it actually
+-- changed, against whatever is currently in the DataStore — never overwrites
+-- the whole table with a possibly-stale local snapshot (see bug #3 above).
+local function persistBanRecord(userId, record)
 	pcall(function()
-		BanStore:SetAsync("Records", BanCache)
+		BanStore:UpdateAsync("Records", function(old)
+			old = old or {}
+			old[tostring(userId)] = record
+			return old
+		end)
+	end)
+end
+
+local function persistBanRemoval(userId)
+	pcall(function()
+		BanStore:UpdateAsync("Records", function(old)
+			old = old or {}
+			old[tostring(userId)] = nil
+			return old
+		end)
 	end)
 end
 
@@ -55,6 +74,7 @@ end
 local RE_Command = makeRemote("AdminCommand", "RemoteEvent")
 local RE_Update  = makeRemote("AdminUpdate", "RemoteEvent")
 local RF_GetData = makeRemote("GetAdminData", "RemoteFunction")
+local RE_Stats   = makeRemote("ReportStats", "RemoteEvent") -- client -> server, self-reported FPS
 
 -- ─────────────────────────────────────────────
 --  UTILITY
@@ -99,8 +119,42 @@ local function resolveBanTarget(input)
 	return nil, nil, nil
 end
 
+-- Resolves an Unban target (bug #1): accepts a raw UserId, OR a name that's
+-- matched (case-insensitively) against the name stored on an existing ban
+-- record, since the command-bar UNBAN button only has a name to go on.
+local function resolveUnbanTarget(input)
+	local uid = tonumber(input)
+	if uid then return uid end
+
+	if type(input) == "string" and input ~= "" then
+		local lowered = string.lower(input)
+		for key, rec in pairs(BanCache) do
+			if rec.name and string.lower(rec.name) == lowered then
+				return tonumber(key)
+			end
+		end
+	end
+
+	return nil
+end
+
 local function notify(player, message, kind)
 	RE_Update:FireClient(player, "Notify", { message = message, kind = kind or "info" })
+end
+
+-- ─────────────────────────────────────────────
+--  CROSS-SERVER BUS
+--  Announce / Ban / Unban / Log all go out over MessagingService so every
+--  live server (this one included) ends up in the same state. Each server
+--  only ever WRITES to the DataStore once, from the server the command was
+--  actually run on — every server (including that one) then reacts to its
+--  own copy of the published message to update its local cache + UI. This
+--  keeps the "who mutates the cache" logic in exactly one place.
+-- ─────────────────────────────────────────────
+local function publishBus(kind, payload)
+	pcall(function()
+		MessagingService:PublishAsync(CONFIG.BusTopic, { kind = kind, payload = payload })
+	end)
 end
 
 local function broadcastLog(action, adminName, targetName, extra)
@@ -111,12 +165,6 @@ local function broadcastLog(action, adminName, targetName, extra)
 		extra    = extra or "",
 		time_str = os.date("%H:%M:%S"),
 	}
-
-	table.insert(LogCache, entry)
-	while #LogCache > CONFIG.MaxLogEntries do
-		table.remove(LogCache, 1)
-	end
-
 	pcall(function()
 		LogStore:UpdateAsync("Entries", function(old)
 			old = old or {}
@@ -127,11 +175,67 @@ local function broadcastLog(action, adminName, targetName, extra)
 			return old
 		end)
 	end)
-
-	for _, p in ipairs(Players:GetPlayers()) do
-		if isAdmin(p) then RE_Update:FireClient(p, "Log", entry) end
-	end
+	publishBus("Log", entry)
 end
+
+pcall(function()
+	MessagingService:SubscribeAsync(CONFIG.BusTopic, function(message)
+		local data = message.Data
+		if type(data) ~= "table" or type(data.kind) ~= "string" then return end
+		local payload = data.payload
+
+		if data.kind == "Announce" then
+			for _, p in ipairs(Players:GetPlayers()) do
+				RE_Update:FireClient(p, "Announce", payload)
+			end
+
+		elseif data.kind == "Log" then
+			table.insert(LogCache, payload)
+			while #LogCache > CONFIG.MaxLogEntries do
+				table.remove(LogCache, 1)
+			end
+			for _, p in ipairs(Players:GetPlayers()) do
+				if isAdmin(p) then RE_Update:FireClient(p, "Log", payload) end
+			end
+
+		elseif data.kind == "BanAdded" then
+			BanCache[tostring(payload.userId)] = {
+				name = payload.name, reason = payload.reason, bannedBy = payload.bannedBy,
+				timestamp = payload.timestamp, expiresAt = payload.expiresAt, deviceBlock = payload.deviceBlock,
+			}
+			for _, p in ipairs(Players:GetPlayers()) do
+				if isAdmin(p) then RE_Update:FireClient(p, "BanAdded", payload) end
+			end
+
+		elseif data.kind == "BanRemoved" then
+			BanCache[tostring(payload.userId)] = nil
+			for _, p in ipairs(Players:GetPlayers()) do
+				if isAdmin(p) then RE_Update:FireClient(p, "BanRemoved", payload) end
+			end
+		end
+	end)
+end)
+
+-- ─────────────────────────────────────────────
+--  PER-PLAYER LIVE STATS (ping / fps / country)
+-- ─────────────────────────────────────────────
+local ClientFPS     = {} -- [userId] = number
+local PlayerCountry = {} -- [userId] = "US" etc, or "??" until resolved/on failure
+
+local function resolveCountry(player)
+	task.spawn(function()
+		local ok, code = pcall(function()
+			return LocalizationService:GetCountryRegionForPlayerAsync(player)
+		end)
+		PlayerCountry[player.UserId] = (ok and code) or "??"
+	end)
+end
+
+RE_Stats.OnServerEvent:Connect(function(player, fps)
+	if type(fps) == "number" then
+		ClientFPS[player.UserId] = math.clamp(math.floor(fps), 0, 999)
+	end
+end)
 
 -- ─────────────────────────────────────────────
 --  PLAYER CONNECTIONS
@@ -145,12 +249,14 @@ Players.PlayerAdded:Connect(function(player)
 		if rec.expiresAt ~= -1 and rec.expiresAt < os.time() then
 			-- Expired — clean it up instead of kicking.
 			BanCache[uidStr] = nil
-			saveBans()
+			persistBanRemoval(player.UserId)
 		else
 			player:Kick("🚫 BANNED\nReason: " .. tostring(rec.reason))
 			return
 		end
 	end
+
+	resolveCountry(player)
 
 	for _, p in ipairs(Players:GetPlayers()) do
 		if isAdmin(p) then
@@ -160,6 +266,9 @@ Players.PlayerAdded:Connect(function(player)
 end)
 
 Players.PlayerRemoving:Connect(function(player)
+	ClientFPS[player.UserId] = nil
+	PlayerCountry[player.UserId] = nil
+
 	for _, p in ipairs(Players:GetPlayers()) do
 		if isAdmin(p) then
 			RE_Update:FireClient(p, "PlayerLeft", { userId = player.UserId })
@@ -167,17 +276,22 @@ Players.PlayerRemoving:Connect(function(player)
 	end
 end)
 
--- Live ping updates so the Players page doesn't go stale.
+-- Live ping/fps/country updates so the Players page doesn't go stale.
 task.spawn(function()
 	while true do
-		task.wait(CONFIG.PingInterval)
+		task.wait(CONFIG.StatsInterval)
 		local admins, snapshot = {}, {}
 		for _, p in ipairs(Players:GetPlayers()) do
-			table.insert(snapshot, { userId = p.UserId, ping = math.floor(p:GetNetworkPing() * 1000) })
+			table.insert(snapshot, {
+				userId  = p.UserId,
+				ping    = math.floor(p:GetNetworkPing() * 1000),
+				fps     = ClientFPS[p.UserId] or 0,
+				country = PlayerCountry[p.UserId] or "??",
+			})
 			if isAdmin(p) then table.insert(admins, p) end
 		end
 		for _, a in ipairs(admins) do
-			RE_Update:FireClient(a, "PingUpdate", snapshot)
+			RE_Update:FireClient(a, "StatsUpdate", snapshot)
 		end
 	end
 end)
@@ -195,18 +309,20 @@ RF_GetData.OnServerInvoke = function(player)
 			displayName = p.DisplayName,
 			userId      = p.UserId,
 			ping        = math.floor(p:GetNetworkPing() * 1000),
+			fps         = ClientFPS[p.UserId] or 0,
+			country     = PlayerCountry[p.UserId] or "??",
 			isAdmin     = isAdmin(p),
 		})
 	end
 
 	for uid, rec in pairs(BanCache) do
 		table.insert(data.bans, {
-			userId     = tonumber(uid),
-			name       = rec.name,
-			reason     = rec.reason,
-			bannedBy   = rec.bannedBy,
-			timestamp  = rec.timestamp,
-			expiresAt  = rec.expiresAt,
+			userId      = tonumber(uid),
+			name        = rec.name,
+			reason      = rec.reason,
+			bannedBy    = rec.bannedBy,
+			timestamp   = rec.timestamp,
+			expiresAt   = rec.expiresAt,
 			deviceBlock = rec.deviceBlock,
 		})
 	end
@@ -243,38 +359,30 @@ RE_Command.OnServerEvent:Connect(function(sender, cmd, data)
 		local banOk = pcall(function()
 			Players:BanAsync({
 				UserIds            = { targetId },
-				ApplyToUniverse     = true,
-				Duration            = durationSeconds,
-				DisplayReason       = reason,
-				PrivateReason       = reason .. " (banned by " .. sender.Name .. ")",
-				ExcludeAltAccounts  = false, -- always propagate to known alt accounts
-				ApplyDeviceBlock    = deviceBlock,
+				ApplyToUniverse    = true,
+				Duration           = durationSeconds,
+				DisplayReason      = reason,
+				PrivateReason      = reason .. " (banned by " .. sender.Name .. ")",
+				ExcludeAltAccounts = false, -- always propagate to known alt accounts
+				ApplyDeviceBlock   = deviceBlock,
 			})
 		end)
 
-		-- Our own record, used by the Bans tab and as a kick-on-join fallback.
 		local expiresAt = (durationSeconds == -1) and -1 or (os.time() + durationSeconds)
-		BanCache[tostring(targetId)] = {
-			name        = displayName,
-			reason      = reason,
-			bannedBy    = sender.Name,
-			timestamp   = os.time(),
-			expiresAt   = expiresAt,
-			deviceBlock = deviceBlock,
-		}
-		saveBans()
+		local timestamp = os.time()
+		persistBanRecord(targetId, {
+			name = displayName, reason = reason, bannedBy = sender.Name,
+			timestamp = timestamp, expiresAt = expiresAt, deviceBlock = deviceBlock,
+		})
 
 		if target then
 			target:Kick("🚫 Banned by " .. sender.Name .. "\nReason: " .. reason)
 		end
 
-		local banData = {
+		publishBus("BanAdded", {
 			userId = targetId, name = displayName, reason = reason, bannedBy = sender.Name,
-			timestamp = BanCache[tostring(targetId)].timestamp, expiresAt = expiresAt, deviceBlock = deviceBlock,
-		}
-		for _, p in ipairs(Players:GetPlayers()) do
-			if isAdmin(p) then RE_Update:FireClient(p, "BanAdded", banData) end
-		end
+			timestamp = timestamp, expiresAt = expiresAt, deviceBlock = deviceBlock,
+		})
 
 		local durText = (days > 0) and (days .. "d") or "permanent"
 		broadcastLog("BAN", sender.Name, displayName, reason .. " [" .. durText .. (deviceBlock and ", device-blocked" or "") .. "]")
@@ -286,21 +394,22 @@ RE_Command.OnServerEvent:Connect(function(sender, cmd, data)
 		end
 
 	elseif cmd == "Unban" then
-		local uid = tonumber(data.userId)
-		if not uid then return end
+		-- Accepts either data.userId (raw id, used by the per-row Unban button)
+		-- or data.target (a name, used by the command-bar UNBAN button) — see
+		-- bug #1 in the header.
+		local uid = resolveUnbanTarget(data.userId or data.target)
+		if not uid then
+			notify(sender, "No ban record found for: " .. tostring(data.userId or data.target), "error")
+			return
+		end
 
 		pcall(function()
 			Players:UnbanAsync({ UserIds = { uid }, ApplyToUniverse = true })
 		end)
 
-		local key = tostring(uid)
-		local rec = BanCache[key]
-		BanCache[key] = nil
-		saveBans()
-
-		for _, p in ipairs(Players:GetPlayers()) do
-			if isAdmin(p) then RE_Update:FireClient(p, "BanRemoved", { userId = uid }) end
-		end
+		local rec = BanCache[tostring(uid)]
+		persistBanRemoval(uid)
+		publishBus("BanRemoved", { userId = uid })
 
 		local name = rec and rec.name or tostring(uid)
 		broadcastLog("UNBAN", sender.Name, name, "")
@@ -355,8 +464,6 @@ RE_Command.OnServerEvent:Connect(function(sender, cmd, data)
 		hum.WalkSpeed = speed
 		broadcastLog("SPEED", sender.Name, target.Name, "Speed: " .. tostring(speed))
 		notify(sender, "Set " .. target.Name .. "'s speed to " .. speed, "success")
-		
-		
 
 	elseif cmd == "Respawn" then
 		local target = getPlayerByName(targetName)
@@ -381,13 +488,8 @@ RE_Command.OnServerEvent:Connect(function(sender, cmd, data)
 	elseif cmd == "Announce" then
 		local msg = data.message or ""
 		if msg == "" then return end
-		local count = 0
-		for _, p in ipairs(Players:GetPlayers()) do
-			RE_Update:FireClient(p, "Announce", { message = msg, admin = sender.Name })
-			count = count + 1
-		end
+		publishBus("Announce", { message = msg, admin = sender.Name })
 		broadcastLog("ANNOUNCE", sender.Name, "ALL", msg)
-		notify(sender, "Broadcast sent to " .. count .. " player(s)", "success")
+		notify(sender, "Broadcast sent to all servers", "success")
 	end
 end)
-
